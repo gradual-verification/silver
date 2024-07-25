@@ -4,11 +4,13 @@
 //
 // Copyright (c) 2011-2019 ETH Zurich.
 
-import org.scalatest.FunSuite
+import org.scalatest.funsuite.AnyFunSuite
 import viper.silver.ast.utility.rewriter.{Rewritable, StrategyBuilder}
+
+import scala.annotation.unused
 import scala.reflect.runtime.{universe => reflection}
 
-class RewriteWithCycles extends FunSuite {
+class RewriteWithCycles extends AnyFunSuite {
 
 
   test("SimpleCycle") {

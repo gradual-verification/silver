@@ -9,10 +9,9 @@ package viper.silver.plugin.standard.termination.transformation
 import org.jgrapht.graph.{DefaultDirectedGraph, DefaultEdge}
 import viper.silver.ast.utility.Statements.EmptyStmt
 import viper.silver.ast.utility.rewriter.Traverse
-import viper.silver.ast.utility.ViperStrategy
+import viper.silver.ast.utility.{Simplifier, ViperStrategy}
 import viper.silver.ast.{And, Bool, ErrTrafo, Exp, FalseLit, FuncApp, Function, LocalVarDecl, Method, Node, NodeTrafo, Old, Result, Seqn, Stmt}
 import viper.silver.plugin.standard.termination.{DecreasesSpecification, FunctionTerminationError}
-import viper.silver.verifier.ConsistencyError
 import viper.silver.verifier.errors.AssertFailed
 
 trait FunctionCheck extends ProgramManager with DecreasesCheck with ExpTransformer with NestedPredicates with ErrorReporter {
@@ -54,7 +53,7 @@ trait FunctionCheck extends ProgramManager with DecreasesCheck with ExpTransform
         val context = FContext(f)
 
         val proofMethodBody: Stmt = {
-          val stmt: Stmt = simplifyStmts.execute(transformExp(f.body.get, context))
+          val stmt: Stmt = Simplifier.simplify(transformExp(f.body.get, context, false))
           if (requireNestedInfo) {
             addNestedPredicateInformation.execute(stmt)
           } else {
@@ -65,7 +64,7 @@ trait FunctionCheck extends ProgramManager with DecreasesCheck with ExpTransform
         if (proofMethodBody != EmptyStmt) {
 
           val proofMethod = Method(proofMethodName, f.formalArgs, Nil, f.pres, Nil,
-            Option(Seqn(Seq(proofMethodBody), Nil)()))()
+            Option(Seqn(Seq(proofMethodBody), Nil)()))(info = f.info)
 
           Seq(proofMethod)
         } else {
@@ -86,10 +85,10 @@ trait FunctionCheck extends ProgramManager with DecreasesCheck with ExpTransform
           .map(p => ViperStrategy.Slim({
             case Result(_) => resultVariable.localVar
           }, Traverse.BottomUp).execute[Exp](p))
-          .reduce((e, p) => And(e, p)())
+          .reduce((e, p) => And(e, p)(e.pos))
 
         val proofMethodBody: Stmt = {
-          val stmt: Stmt = simplifyStmts.execute(transformExp(posts, context))
+          val stmt: Stmt = Simplifier.simplify(transformExp(posts, context, false))
           if (requireNestedInfo) {
             addNestedPredicateInformation.execute(stmt)
           } else {
@@ -99,7 +98,7 @@ trait FunctionCheck extends ProgramManager with DecreasesCheck with ExpTransform
 
         if (proofMethodBody != EmptyStmt) {
           val proofMethod = Method(proofMethodName, f.formalArgs, Nil, f.pres, Nil,
-            Option(Seqn(Seq(proofMethodBody), Seq(resultVariable))()))()
+            Option(Seqn(Seq(proofMethodBody), Seq(resultVariable))()))(info = f.info)
 
           Seq(proofMethod)
         } else {
@@ -112,13 +111,13 @@ trait FunctionCheck extends ProgramManager with DecreasesCheck with ExpTransform
         val context = FContext(f)
 
         // concatenate all pres
-        val pres = f.pres.reduce((e, p) => And(e, p)())
+        val pres = f.pres.reduce((e, p) => And(e, p)(e.pos))
 
-        val proofMethodBody: Stmt = simplifyStmts.execute(transformExp(pres, context))
+        val proofMethodBody: Stmt = Simplifier.simplify(transformExp(pres, context, true))
 
         if (proofMethodBody != EmptyStmt) {
           val proofMethod = Method(proofMethodName, f.formalArgs, Nil, Nil, Nil,
-            Option(Seqn(Seq(proofMethodBody), Seq(context.conditionInEx.get))()))()
+            Option(Seqn(Seq(proofMethodBody), Seq(context.conditionInEx.get))()))(info = f.info)
 
           Seq(proofMethod)
         } else {
@@ -137,12 +136,12 @@ trait FunctionCheck extends ProgramManager with DecreasesCheck with ExpTransform
    *
    * @return a statement representing the expression
    */
-  override val transformExp: PartialFunction[(Exp, ExpressionContext), Stmt] = {
-    case (functionCall: FuncApp, context: FunctionContext) =>
+  override def transformExp(e: Exp, c: ExpressionContext, inhaleExp: Boolean): Stmt = (e, c) match {
+    case (functionCall: FuncApp, context: FunctionContext @unchecked) =>
       val stmts = collection.mutable.ArrayBuffer[Stmt]()
 
       // check the arguments
-      val termChecksOfArgs: Seq[Stmt] = functionCall.getArgs map (a => transformExp(a, context))
+      val termChecksOfArgs: Seq[Stmt] = functionCall.getArgs map (a => transformExp(a, context, false))
       stmts.appendAll(termChecksOfArgs)
 
       getFunctionDecreasesSpecification(context.functionName).tuple match {
@@ -218,22 +217,8 @@ trait FunctionCheck extends ProgramManager with DecreasesCheck with ExpTransform
         // no tuple is defined, hence, nothing must be checked
         // should not happen
       }
-      Seqn(stmts, Nil)()
-    case default => super.transformExp(default)
-  }
-
-  override def transformUnknownExp(e: Exp, c: ExpressionContext): Stmt = {
-    reportUnsupportedExp(e)
-    EmptyStmt
-  }
-
-  /**
-   * Issues a consistency error for unsupported expressions.
-   *
-   * @param unsupportedExp to be reported.
-   */
-  def reportUnsupportedExp(unsupportedExp: Exp): Unit = {
-    reportError(ConsistencyError("Unsupported expression detected: " + unsupportedExp + ", " + unsupportedExp.getClass, unsupportedExp.pos))
+      Seqn(stmts.toSeq, Nil)()
+    case _ => super.transformExp(e, c, inhaleExp)
   }
 
   // context creator
@@ -259,7 +244,7 @@ trait FunctionCheck extends ProgramManager with DecreasesCheck with ExpTransform
 
     program.functions.foreach(graph.addVertex)
 
-    def process(f: Function, n: Node) {
+    def process(f: Function, n: Node): Unit = {
       n visit {
         case app: FuncApp =>
           graph.addEdge(f, app.func(program))
