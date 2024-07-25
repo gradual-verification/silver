@@ -6,16 +6,24 @@
 
 package viper.silver.ast
 
-import java.util.concurrent.atomic.AtomicInteger
-
+import scala.collection.mutable
 import scala.reflect.ClassTag
 import pretty.FastPrettyPrinter
 import utility._
 import viper.silver.ast.utility.rewriter.Traverse.Traverse
 import viper.silver.ast.utility.rewriter.{Rewritable, StrategyBuilder, Traverse}
 import viper.silver.verifier.errors.ErrorNode
-import viper.silver.verifier.{AbstractVerificationError, ConsistencyError, ErrorReason}
+import viper.silver.verifier.{
+  AbstractVerificationError,
+  ConsistencyError,
+  ErrorReason
+}
 
+import java.util.concurrent.atomic.AtomicInteger
+
+/*
+Every AST node is assigned a unique ID from this counter.
+ */
 object AstNodeCounter {
   val counter = new AtomicInteger
 }
@@ -35,10 +43,9 @@ Some design choices:
 - The AST can represent programs with cycles, for example to represent calls to methods. The cycles are
   handled by using the name of the corresponding program element (stored as a String), which can be looked
   up in the Program itself (e.g. findMethod). This allows AST instances to be immutable.
-*/
+ */
 
-/**
-  * A common ancestor for AST nodes.  Note that this trait is not sealed, because we having all
+/** A common ancestor for AST nodes.  Note that this trait is not sealed, because we having all
   * AST node classes in a single file would be too tedious and difficult to manage.  However,
   * there is only a small number of subtypes of `Node`, all of which are sealed.  These are:
   * - Program
@@ -54,109 +61,161 @@ Some design choices:
   * Note that all but Program are transitive subtypes of `Node` via `Hashable`. The reason is
   * that AST node hashes may depend on the entire program, not just their sub-AST.
   */
-trait Node extends Traversable[Node] with Rewritable {
+trait Node extends Iterable[Node] with Rewritable {
 
   /** @see [[Nodes.subnodes()]] */
   def subnodes = Nodes.subnodes(this)
 
   /** @see [[Visitor.reduceTree()]] */
-  def reduceTree[A](f: (Node, Seq[A]) => A) = Visitor.reduceTree(this, Nodes.subnodes)(f)
+  def reduceTree[A](f: (Node, Seq[A]) => A) =
+    Visitor.reduceTree(this, Nodes.subnodes)(f)
 
   /** @see [[Visitor.reduceWithContext()]] */
-  def reduceWithContext[C, R](context: C, enter: (Node, C) => C, combine: (Node, C, Seq[R]) => R) = {
+  def reduceWithContext[C, R](
+      context: C,
+      enter: (Node, C) => C,
+      combine: (Node, C, Seq[R]) => R
+  ) = {
     Visitor.reduceWithContext(this, Nodes.subnodes)(context, enter, combine)
   }
 
-  /** Applies the function `f` to the AST node, then visits all subnodes. */
-  def foreach[A](f: Node => A) = Visitor.visit(this, Nodes.subnodes) { case a: Node => f(a) }
+  /** Apply the given function to the AST node and all its subnodes. */
+  override def foreach[A](f: Node => A) = Visitor.visit(this, Nodes.subnodes) {
+    case a: Node => f(a)
+  }
+
+  /** Builds a new collection with all the AST nodes and returns an iterator over it. */
+  def iterator: Iterator[Node] = {
+    val elements = mutable.Queue.empty[Node]
+    for (x <- this) {
+      elements.append(x)
+    }
+    elements.iterator
+  }
 
   /** @see [[Visitor.visit()]] */
-  def visit[A](f: PartialFunction[Node, A]) {
+  def visit[A](f: PartialFunction[Node, A]): Unit = {
     Visitor.visit(this, Nodes.subnodes)(f)
   }
 
   /** @see [[Visitor.visitWithContext()]] */
-  def visitWithContext[C](c: C)(f: C => PartialFunction[Node, C]) {
+  def visitWithContext[C](c: C)(f: C => PartialFunction[Node, C]): Unit = {
     Visitor.visitWithContext(this, Nodes.subnodes, c)(f)
   }
 
   /** @see [[Visitor.visitWithContextManually()]] */
-  def visitWithContextManually[C, A](c: C)(f: C => PartialFunction[Node, A]) {
+  def visitWithContextManually[C, A](
+      c: C
+  )(f: C => PartialFunction[Node, A]): Unit = {
     Visitor.visitWithContextManually(this, Nodes.subnodes, c)(f)
   }
 
   /** @see [[Visitor.visit()]] */
-  def visit[A](f1: PartialFunction[Node, A], f2: PartialFunction[Node, A]) {
+  def visit[A](
+      f1: PartialFunction[Node, A],
+      f2: PartialFunction[Node, A]
+  ): Unit = {
     Visitor.visit(this, Nodes.subnodes, f1, f2)
   }
 
   /** @see [[Visitor.visitOpt()]] */
-  def visitOpt(f: Node => Boolean) {
+  def visitOpt(f: Node => Boolean): Unit = {
     Visitor.visitOpt(this, Nodes.subnodes)(f)
   }
 
   /** @see [[Visitor.visitOpt()]] */
-  def visitOpt[A](f1: Node => Boolean, f2: Node => A) {
+  def visitOpt[A](f1: Node => Boolean, f2: Node => A): Unit = {
     Visitor.visitOpt(this, Nodes.subnodes, f1, f2)
   }
 
   /** @see [[Visitor.existsDefined()]] */
-  def existsDefined[A](f: PartialFunction[Node, A]): Boolean = Visitor.existsDefined(this, Nodes.subnodes)(f)
+  def existsDefined[A](f: PartialFunction[Node, A]): Boolean =
+    Visitor.existsDefined(this, Nodes.subnodes)(f)
 
   /** @see [[Visitor.hasSubnode()]] */
-  def hasSubnode(toFind: Node): Boolean = Visitor.hasSubnode(this, toFind, Nodes.subnodes)
+  def hasSubnode(toFind: Node): Boolean =
+    Visitor.hasSubnode(this, toFind, Nodes.subnodes)
 
   override def toString() = FastPrettyPrinter.pretty(this)
 
-  def toOneLinerStr() = s"<${getClass.getSimpleName()}> ``" + (
-    if (toString().indexOf("\n") != -1)
-      toString().take(toString().indexOf("\n")) + "..."
-    else
-      toString() ) + "''"
+  def toOneLinerStr() =
+    s"<${getClass.getSimpleName()}> ``" + (if (toString().indexOf("\n") != -1)
+                                             toString().take(
+                                               toString().indexOf("\n")
+                                             ) + "..."
+                                           else
+                                             toString()) + "''"
 
   /** @see [[viper.silver.ast.utility.ViperStrategy]] */
-  def transform(pre: PartialFunction[Node, Node] = PartialFunction.empty,
-                recurse: Traverse = Traverse.Innermost)
-               : this.type =
+  def transform(
+      pre: PartialFunction[Node, Node] = PartialFunction.empty,
+      recurse: Traverse = Traverse.Innermost
+  ): this.type = {
 
-  StrategyBuilder.Slim[Node](pre, recurse) execute[this.type] (this)
+    StrategyBuilder.Slim[Node](pre, recurse) execute [ this.type] (this)
+  }
 
+  def transformForceCopy(
+      pre: PartialFunction[Node, Node] = PartialFunction.empty,
+      recurse: Traverse = Traverse.Innermost
+  ): this.type = {
 
-  /**
-    * Allows a transformation with a custom context threaded through
+    StrategyBuilder
+      .Slim[Node](pre, recurse)
+      .forceCopy() execute [ this.type] (this)
+  }
+
+  /** Allows a transformation with a custom context threaded through
     *
-    * @see [[viper.silver.ast.utility.ViperStrategy]] */
-  def transformWithContext[C](transformation: PartialFunction[(Node,C), (Node, C)] = PartialFunction.empty,
-                             initialContext: C,
-                recurse: Traverse = Traverse.Innermost)
-  : this.type =
-    ViperStrategy.CustomContext[C](transformation, initialContext, recurse) execute[this.type] (this)
+    * @see [[viper.silver.ast.utility.ViperStrategy]]
+    */
+  def transformWithContext[C](
+      transformation: PartialFunction[(Node, C), (Node, C)] =
+        PartialFunction.empty,
+      initialContext: C,
+      recurse: Traverse = Traverse.Innermost
+  ): this.type = {
 
-  def transformNodeAndContext[C](transformation: PartialFunction[(Node,C), (Node, C)],
-                                 initialContext: C,
-                                 recurse: Traverse = Traverse.Innermost) : this.type =
-    StrategyBuilder.RewriteNodeAndContext[Node, C](transformation, initialContext, recurse).execute[this.type](this)
+    ViperStrategy.CustomContext[C](
+      transformation,
+      initialContext,
+      recurse
+    ) execute [ this.type] (this)
+  }
+
+  def transformNodeAndContext[C](
+      transformation: PartialFunction[(Node, C), (Node, C)],
+      initialContext: C,
+      recurse: Traverse = Traverse.Innermost
+  ): this.type = {
+
+    StrategyBuilder
+      .RewriteNodeAndContext[Node, C](transformation, initialContext, recurse)
+      .execute[this.type](this)
+  }
 
   def replace(original: Node, replacement: Node): this.type =
     this.transform { case `original` => replacement }
 
-  def replace[N <: Node : ClassTag](replacements: Map[N, Node]): this.type =
+  def replace[N <: Node: ClassTag](replacements: Map[N, Node]): this.type =
     if (replacements.isEmpty) this
-    else this.transform { case t: N if replacements.contains(t) => replacements(t) }
+    else
+      this.transform {
+        case t: N if replacements.contains(t) => replacements(t)
+      }
 
   /** @see [[Visitor.deepCollect()]] */
   def deepCollect[A](f: PartialFunction[Node, A]): Seq[A] =
-  Visitor.deepCollect(Seq(this), Nodes.subnodes)(f)
+    Visitor.deepCollect(Seq(this), Nodes.subnodes)(f)
 
   /** @see [[Visitor.shallowCollect()]] */
   def shallowCollect[R](f: PartialFunction[Node, R]): Seq[R] =
-  Visitor.shallowCollect(Seq(this), Nodes.subnodes)(f)
+    Visitor.shallowCollect(Seq(this), Nodes.subnodes)(f)
 
-  def contains(n: Node): Boolean = this.existsDefined {
-    case `n` =>
+  def contains(n: Node): Boolean = this.existsDefined { case `n` =>
   }
 
-  def contains[N <: Node : ClassTag]: Boolean = {
+  def contains[N <: Node: ClassTag]: Boolean = {
     val clazz = implicitly[ClassTag[N]].runtimeClass
     this.existsDefined {
       case n: N if clazz.isInstance(n) =>
@@ -169,18 +228,21 @@ trait Node extends Traversable[Node] with Rewritable {
   // Get metadata with correct types
   def getPrettyMetadata: (Position, Info, ErrorTrafo) = {
     val metadata = getMetadata
-    assert(metadata.size == 3, "Invalid number of metadata fields for Node:" + this)
+    assert(
+      metadata.size == 3,
+      "Invalid number of metadata fields for Node:" + this
+    )
     val pos = metadata.head match {
       case p: Position => p
-      case _ => throw new AssertionError("Invalid Info of Node: " + this)
+      case _           => throw new AssertionError("Invalid Info of Node: " + this)
     }
     val info = metadata(1) match {
       case i: Info => i
-      case _ => throw new AssertionError("Invalid Position of Node: " + this)
+      case _       => throw new AssertionError("Invalid Position of Node: " + this)
     }
     val errorT = metadata(2) match {
       case e: ErrorTrafo => e
-      case _ => throw new AssertionError("Invalid ErrorTrafo of Node: " + this)
+      case _             => throw new AssertionError("Invalid ErrorTrafo of Node: " + this)
     }
     (pos, info, errorT)
   }
@@ -190,19 +252,7 @@ trait Node extends Traversable[Node] with Rewritable {
     Seq(NoPosition, NoInfo, NoTrafos)
   }
 
-  //returns a list of consistency errors in the node. Only concrete classes should implement check.
-  lazy val check : Seq[ConsistencyError] = Seq()
-  //returns a list of consistency errors in the node as well as all its children nodes.
-  lazy val checkTransitively : Seq[ConsistencyError] =
-    check ++
-    productIterator.flatMap{
-      case n: Node => n.checkTransitively
-      case s: Seq[Node @unchecked] => s.flatMap(_.checkTransitively)
-      case s: Set[Node @unchecked] => s.flatMap(_.checkTransitively)
-      case Some(n: Node) => n.checkTransitively
-      case _ => Seq()
-    }
-
+  //GV - Each node may be associated with a set of runtime checks to be inserted at its location in the AST.
   private var runtimeChecks: Seq[Exp] = Seq()
 
   def getChecks(): Seq[Exp] = runtimeChecks
@@ -213,9 +263,21 @@ trait Node extends Traversable[Node] with Rewritable {
     }
   }
 
+  //returns a list of consistency errors in the node. Only concrete classes should implement check.
+  lazy val check: Seq[ConsistencyError] = Seq()
+  //returns a list of consistency errors in the node as well as all its children nodes.
+  lazy val checkTransitively: Seq[ConsistencyError] =
+    check ++
+      productIterator.flatMap {
+        case n: Node                 => n.checkTransitively
+        case s: Seq[Node @unchecked] => s.flatMap(_.checkTransitively)
+        case s: Set[Node @unchecked] => s.flatMap(_.checkTransitively)
+        case Some(n: Node)           => n.checkTransitively
+        case _                       => Seq()
+      }
+
   val uniqueIdentifier = AstNodeCounter.counter.getAndIncrement
 }
-
 
 /** Allow a node to have control over the error error message it causes (used in rewriter) */
 trait TransformableErrors {
@@ -223,12 +285,14 @@ trait TransformableErrors {
   def errT: ErrorTrafo
 
   // Rewriting strategy to transform every node back that has a back transformation specified
-  private lazy val nodeTrafoStrat = StrategyBuilder.Slim[Node]({
-    case n: TransformableErrors => {
-      val res = transformNode(n.asInstanceOf[ErrorNode])
-      res
-    }
-  }).repeat // Repeat because if a back-transformed node can have a back-transformation again
+  private lazy val nodeTrafoStrat = StrategyBuilder
+    .Slim[Node]({
+      case n: TransformableErrors => {
+        val res = transformNode(n.asInstanceOf[ErrorNode])
+        res
+      }
+    })
+    .repeat // Repeat because if a back-transformed node can have a back-transformation again
 
   // Helper function for applying the transformations
   private def foldfunc[E](tr: PartialFunction[E, E], nd: E): E = {
@@ -240,16 +304,20 @@ trait TransformableErrors {
   }
 
   /** Transform error `e` back according to the transformations in backwards chronological order */
-  def transformError(e: AbstractVerificationError): AbstractVerificationError = {
+  def transformError(
+      e: AbstractVerificationError
+  ): AbstractVerificationError = {
     val newError = errT.eTransformations.foldRight(e)(foldfunc)
-    val transformedNode = nodeTrafoStrat.execute[ErrorNode](newError.offendingNode)
+    val transformedNode =
+      nodeTrafoStrat.execute[ErrorNode](newError.offendingNode)
     newError.withNode(transformedNode).asInstanceOf[AbstractVerificationError]
   }
 
   /** Transform reason `e` back according to the transformations in backwards chronological order */
   def transformReason(e: ErrorReason): ErrorReason = {
     val reason = errT.rTransformations.foldRight(e)(foldfunc)
-    val transformedNode = nodeTrafoStrat.execute(reason.offendingNode).asInstanceOf[ErrorNode]
+    val transformedNode =
+      nodeTrafoStrat.execute(reason.offendingNode).asInstanceOf[ErrorNode]
     reason.withNode(transformedNode).asInstanceOf[ErrorReason]
   }
 
@@ -267,21 +335,30 @@ case object NoTrafos extends ErrorTrafo {
 }
 
 /** Class that allows generation of all transformations */
-case class Trafos(error: List[PartialFunction[AbstractVerificationError, AbstractVerificationError]], reason: List[PartialFunction[ErrorReason, ErrorReason]], node: Option[ErrorNode]) extends ErrorTrafo {
+case class Trafos(
+    error: List[
+      PartialFunction[AbstractVerificationError, AbstractVerificationError]
+    ],
+    reason: List[PartialFunction[ErrorReason, ErrorReason]],
+    node: Option[ErrorNode]
+) extends ErrorTrafo {
   val eTransformations = error
   val rTransformations = reason
   val nTransformations = node
 }
 
 /** Create new error transformation */
-case class ErrTrafo(error: PartialFunction[AbstractVerificationError, AbstractVerificationError]) extends ErrorTrafo {
+case class ErrTrafo(
+    error: PartialFunction[AbstractVerificationError, AbstractVerificationError]
+) extends ErrorTrafo {
   val eTransformations = List(error)
   val rTransformations = Nil
   val nTransformations = None
 }
 
 /** Create new reason transformation */
-case class ReTrafo(reason: PartialFunction[ErrorReason, ErrorReason]) extends ErrorTrafo {
+case class ReTrafo(reason: PartialFunction[ErrorReason, ErrorReason])
+    extends ErrorTrafo {
   val eTransformations = Nil
   val rTransformations = List(reason)
   val nTransformations = None
@@ -294,21 +371,23 @@ case class NodeTrafo(node: ErrorNode) extends ErrorTrafo {
   val nTransformations = Some(node)
 }
 
-/** Combine two Trafos into one **/
+/** Combine two Trafos into one * */
 object MakeTrafoPair {
-  def apply(first: ErrorTrafo, second: ErrorTrafo) : ErrorTrafo = first match {
+  def apply(first: ErrorTrafo, second: ErrorTrafo): ErrorTrafo = first match {
     case NoTrafos => second
-    case _ => second match {
-      case NoTrafos => first
-      case _ => first + second
-    }
+    case _ =>
+      second match {
+        case NoTrafos => first
+        case _        => first + second
+      }
   }
 }
 
-
 /** Base trait for error transformation objects */
 trait ErrorTrafo {
-  def eTransformations: List[PartialFunction[AbstractVerificationError, AbstractVerificationError]]
+  def eTransformations: List[
+    PartialFunction[AbstractVerificationError, AbstractVerificationError]
+  ]
 
   def rTransformations: List[PartialFunction[ErrorReason, ErrorReason]]
 
@@ -324,7 +403,11 @@ trait ErrorTrafo {
   // the order in which a chain of node transformations is traversed and the order in which nodes are combined. Please
   // check the comments on method 'nTransformations' for further details.
   def +(t: ErrorTrafo): Trafos = {
-    Trafos(eTransformations ++ t.eTransformations, rTransformations ++ t.rTransformations, if (t.nTransformations.isDefined) t.nTransformations else nTransformations)
+    Trafos(
+      eTransformations ++ t.eTransformations,
+      rTransformations ++ t.rTransformations,
+      if (t.nTransformations.isDefined) t.nTransformations else nTransformations
+    )
   }
 }
 
@@ -336,39 +419,68 @@ trait Info {
   // Whether the owner of this [[Info]] is cached and does not require further verification (but is still needed in the AST).
   def isCached: Boolean
 
-  def getUniqueInfo[T <: Info:ClassTag] : Option[T] = {
+  def getUniqueInfo[T <: Info: ClassTag]: Option[T] = {
     this match {
-      case t:T => Some(t)
-      case ConsInfo(hd,tl) => hd.getUniqueInfo[T] match {
-        case Some(t) => Some(t) // assumes we don't have more than one Info entry of the desired type (somewhere nested in the ConsInfo structure)
-        case None => tl.getUniqueInfo[T]
-      }
+      case t: T => Some(t)
+      case ConsInfo(hd, tl) =>
+        hd.getUniqueInfo[T] match {
+          case Some(t) =>
+            Some(
+              t
+            ) // assumes we don't have more than one Info entry of the desired type (somewhere nested in the ConsInfo structure)
+          case None => tl.getUniqueInfo[T]
+        }
       case _ => None
     }
+  }
+
+  def getAllInfos[T <: Info: ClassTag]: Seq[T] =
+    this match {
+      case t: T                 => Seq(t)
+      case ConsInfo(head, tail) => head.getAllInfos[T] ++ tail.getAllInfos[T]
+      case _                    => Seq.empty
+    }
+
+  def removeUniqueInfo[T <: Info: ClassTag]: Info = this match {
+    case ConsInfo(a, b) =>
+      MakeInfoPair(a.removeUniqueInfo[T], b.removeUniqueInfo[T])
+    case _: T => NoInfo
+    case info => info
   }
 }
 
 /** A default `Info` that is empty. */
 case object NoInfo extends Info {
-  lazy val comment = Nil
-  lazy val isCached = false
+  override val comment = Nil
+  override val isCached = false
+}
+
+case class AnnotationInfo(values: Map[String, Seq[String]]) extends Info {
+  override val isCached = false
+  override val comment = Nil
 }
 
 /** A simple `Info` that contains a list of comments. */
 case class SimpleInfo(comment: Seq[String]) extends Info {
-  lazy val isCached = false
+  override val isCached = false
 }
 
 /** An `Info` instance for labelling a quantifier as auto-triggered. */
 case object AutoTriggered extends Info {
-  lazy val comment = Nil
-  lazy val isCached = false
+  override val comment = Nil
+  override val isCached = false
+}
+
+/** An `Info` for specifying the weight of a quantifier in the SMT encoding. */
+case class WeightedQuantifier(weight: Int) extends Info {
+  override val comment = Nil
+  override val isCached = false
 }
 
 /** An `Info` instance for labelling a pre-verified AST node (e.g., via caching). */
 case object Cached extends Info {
-  lazy val comment = Nil
-  lazy val isCached = true
+  override val comment = Nil
+  override val isCached = true
 }
 
 /** An `Info` instance for labelling a node as synthesized. A synthesized node is one that
@@ -376,24 +488,33 @@ case object Cached extends Info {
   * originate from an AST transformation.
   */
 case object Synthesized extends Info {
-  lazy val comment = Nil
-  lazy val isCached = false
+  override val comment = Nil
+  override val isCached = false
+}
+
+/** An `Info` instance for labelling an AST node which is expected to fail verification.
+  * This is used by Silicon to avoid stopping verification.
+  */
+abstract class FailureExpectedInfo extends Info {
+  override val comment = Nil
+  override val isCached = false
 }
 
 /** An `Info` instance for composing multiple `Info`s together */
 case class ConsInfo(head: Info, tail: Info) extends Info {
-  lazy val comment = head.comment ++ tail.comment
-  lazy val isCached = head.isCached || tail.isCached
+  override val comment = head.comment ++ tail.comment
+  override val isCached = head.isCached || tail.isCached
 }
 
 /** Build a `ConsInfo` instance out of two `Info`s, unless the latter is `NoInfo` (which can be dropped) */
 object MakeInfoPair {
   def apply(head: Info, tail: Info) = head match {
     case NoInfo => tail
-    case _ => tail match {
-      case NoInfo => head
-      case _ => ConsInfo(head, tail)
-    }
+    case _ =>
+      tail match {
+        case NoInfo => head
+        case _      => ConsInfo(head, tail)
+      }
   }
 }
 
@@ -429,7 +550,10 @@ trait Scope {
   // returns locals including those of nested scopes
   lazy val transitiveScopedDecls: Seq[Declaration] =
     scopedDecls ++
-    this.asInstanceOf[Node].shallowCollect {
-      case s: Scope if (s != this) => s.transitiveScopedDecls
-    }.flatten
+      this
+        .asInstanceOf[Node]
+        .shallowCollect {
+          case s: Scope if (s != this) => s.transitiveScopedDecls
+        }
+        .flatten
 }
